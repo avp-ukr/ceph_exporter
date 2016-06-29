@@ -3,7 +3,7 @@ FROM golang:1.6.2
 ENV APP_PATH ${GOPATH}/src/github.com/digitalocean/ceph_exporter
 
 RUN apt-get update \
-    && apt-get install -y apt-transport-https \
+    && apt-get install -y apt-transport-https lsb-release \
     && wget -q -O- 'https://download.ceph.com/keys/release.asc' | apt-key add - \
     && echo "deb https://download.ceph.com/debian-jewel $(lsb_release -cs) main" >>/etc/apt/sources.list \
     && apt-get update \
