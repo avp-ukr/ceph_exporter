@@ -1,4 +1,4 @@
-FROM golang:1.6.3
+FROM golang:1.7.3
 
 ENV APP_PATH ${GOPATH}/src/github.com/digitalocean/ceph_exporter
 
