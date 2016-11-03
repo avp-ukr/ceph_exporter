@@ -31,6 +31,10 @@ type PoolUsageCollector struct {
 	// does not factor in the overcommitment made for individual images.
 	UsedBytes *prometheus.GaugeVec
 
+	// RawUsedBytes tracks the amount of raw bytes currently used for the pool. This
+	// factors in the replication factor (size) of the pool.
+	RawUsedBytes *prometheus.GaugeVec
+
 	// MaxAvail tracks the amount of bytes currently free for the pool,
 	// which depends on the replication settings for the pool in question.
 	MaxAvail *prometheus.GaugeVec
@@ -38,11 +42,22 @@ type PoolUsageCollector struct {
 	// Objects shows the no. of RADOS objects created within the pool.
 	Objects *prometheus.GaugeVec
 
+	// DirtyObjects shows the no. of RADOS dirty objects in a cache-tier pool,
+	// this doesn't make sense in a regular pool, see:
+	// http://lists.ceph.com/pipermail/ceph-users-ceph.com/2015-April/000557.html
+	DirtyObjects *prometheus.GaugeVec
+
 	// ReadIO tracks the read IO calls made for the images within each pool.
-	ReadIO *prometheus.CounterVec
+	ReadIO *prometheus.GaugeVec
+
+	// Readbytes tracks the read throughput made for the images within each pool.
+	ReadBytes *prometheus.GaugeVec
 
 	// WriteIO tracks the write IO calls made for the images within each pool.
-	WriteIO *prometheus.CounterVec
+	WriteIO *prometheus.GaugeVec
+
+	// WriteBytes tracks the write throughput made for the images within each pool.
+	WriteBytes *prometheus.GaugeVec
 }
 
 // NewPoolUsageCollector creates a new instance of PoolUsageCollector and returns
@@ -64,6 +79,15 @@ func NewPoolUsageCollector(conn Conn) *PoolUsageCollector {
 			},
 			poolLabel,
 		),
+		RawUsedBytes: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: cephNamespace,
+				Subsystem: subSystem,
+				Name:      "raw_used_bytes",
+				Help:      "Raw capacity of the pool that is currently under use, this factors in the size",
+			},
+			poolLabel,
+		),
 		MaxAvail: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: cephNamespace,
@@ -82,21 +106,48 @@ func NewPoolUsageCollector(conn Conn) *PoolUsageCollector {
 			},
 			poolLabel,
 		),
-		ReadIO: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
+		DirtyObjects: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: cephNamespace,
 				Subsystem: subSystem,
-				Name:      "read_total",
-				Help:      "Total read i/o calls the pool has been subject to",
+				Name:      "dirty_objects_total",
+				Help:      "Total no. of dirty objects in a cache-tier pool",
 			},
 			poolLabel,
 		),
-		WriteIO: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
+		ReadIO: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: cephNamespace,
+				Subsystem: subSystem,
+				Name:      "read_total",
+				Help:      "Total read i/o calls for the pool",
+			},
+			poolLabel,
+		),
+		ReadBytes: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: cephNamespace,
+				Subsystem: subSystem,
+				Name:      "read_bytes_total",
+				Help:      "Total read throughput for the pool",
+			},
+			poolLabel,
+		),
+		WriteIO: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
 				Namespace: cephNamespace,
 				Subsystem: subSystem,
 				Name:      "write_total",
-				Help:      "Total write i/o calls the pool has been subject to",
+				Help:      "Total write i/o calls for the pool",
+			},
+			poolLabel,
+		),
+		WriteBytes: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: cephNamespace,
+				Subsystem: subSystem,
+				Name:      "write_bytes_total",
+				Help:      "Total write throughput for the pool",
 			},
 			poolLabel,
 		),
@@ -106,10 +157,14 @@ func NewPoolUsageCollector(conn Conn) *PoolUsageCollector {
 func (p *PoolUsageCollector) collectorList() []prometheus.Collector {
 	return []prometheus.Collector{
 		p.UsedBytes,
+		p.RawUsedBytes,
 		p.MaxAvail,
 		p.Objects,
+		p.DirtyObjects,
 		p.ReadIO,
+		p.ReadBytes,
 		p.WriteIO,
+		p.WriteBytes,
 	}
 }
 
@@ -118,11 +173,15 @@ type cephPoolStats struct {
 		Name  string `json:"name"`
 		ID    int    `json:"id"`
 		Stats struct {
-			BytesUsed float64 `json:"bytes_used"`
-			MaxAvail  float64 `json:"max_avail"`
-			Objects   float64 `json:"objects"`
-			Read      float64 `json:"rd"`
-			Write     float64 `json:"wr"`
+			BytesUsed    float64 `json:"bytes_used"`
+			RawBytesUsed float64 `json:"raw_bytes_used"`
+			MaxAvail     float64 `json:"max_avail"`
+			Objects      float64 `json:"objects"`
+			DirtyObjects float64 `json:"dirty"`
+			ReadIO       float64 `json:"rd"`
+			ReadBytes    float64 `json:"rd_bytes"`
+			WriteIO      float64 `json:"wr"`
+			WriteBytes   float64 `json:"wr_bytes"`
 		} `json:"stats"`
 	} `json:"pools"`
 }
@@ -145,10 +204,14 @@ func (p *PoolUsageCollector) collect() error {
 
 	for _, pool := range stats.Pools {
 		p.UsedBytes.WithLabelValues(pool.Name).Set(pool.Stats.BytesUsed)
+		p.RawUsedBytes.WithLabelValues(pool.Name).Set(pool.Stats.RawBytesUsed)
 		p.MaxAvail.WithLabelValues(pool.Name).Set(pool.Stats.MaxAvail)
 		p.Objects.WithLabelValues(pool.Name).Set(pool.Stats.Objects)
-		p.ReadIO.WithLabelValues(pool.Name).Set(pool.Stats.Read)
-		p.WriteIO.WithLabelValues(pool.Name).Set(pool.Stats.Write)
+		p.DirtyObjects.WithLabelValues(pool.Name).Set(pool.Stats.DirtyObjects)
+		p.ReadIO.WithLabelValues(pool.Name).Set(pool.Stats.ReadIO)
+		p.ReadBytes.WithLabelValues(pool.Name).Set(pool.Stats.ReadBytes)
+		p.WriteIO.WithLabelValues(pool.Name).Set(pool.Stats.WriteIO)
+		p.WriteBytes.WithLabelValues(pool.Name).Set(pool.Stats.WriteBytes)
 	}
 
 	return nil
